@@ -51,7 +51,19 @@ if settings.METRICS_ENABLED:
     metrics_app = make_asgi_app()
     app.mount("/metrics", metrics_app)
 
-# 2. Health check shortcuts
+# 2. Health check and root shortcuts
+@app.get("/", tags=["Root"])
+def root():
+    return {
+        "service": "CloudDocs Backend API",
+        "version": "1.0.0",
+        "status": "online",
+        "docs_url": "/docs",
+        "health_url": "/health",
+        "metrics_url": "/metrics",
+        "frontend_app_url": "http://localhost:3000"
+    }
+
 @app.get("/health", tags=["Health"])
 def root_health():
     return {"status": "healthy", "service": "CloudDocs API", "version": "1.0.0"}
