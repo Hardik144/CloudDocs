@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clouddocs-backend
+  namespace: clouddocs
+  labels:
+    app: clouddocs-backend
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: clouddocs-backend
+  template:
+    metadata:
+      labels:
+        app: clouddocs-backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/clouddocs/clouddocs-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: clouddocs-config
+            - secretRef:
+                name: clouddocs-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: clouddocs
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+  selector:
+    app: clouddocs-backend

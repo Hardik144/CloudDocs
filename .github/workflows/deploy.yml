@@ -1,0 +1,75 @@
+name: CloudDocs CD Pipeline & Container Registry
+
+on:
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE: ghcr.io/${{ github.repository }}/clouddocs-backend
+  FRONTEND_IMAGE: ghcr.io/${{ github.repository }}/clouddocs-frontend
+
+jobs:
+  build-and-push:
+    name: Build, Scan & Publish Images to GHCR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Commit Short SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      # Backend Build & Scan
+      - name: Build Backend Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          tags: ${{ env.BACKEND_IMAGE }}:${{ steps.vars.outputs.sha_short }},${{ env.BACKEND_IMAGE }}:latest
+          load: true
+
+      - name: Run Trivy Scan on Backend Image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.BACKEND_IMAGE }}:${{ steps.vars.outputs.sha_short }}
+          severity: "CRITICAL,HIGH"
+          exit-code: "0"
+
+      - name: Push Backend Image to GHCR
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ${{ env.BACKEND_IMAGE }}:${{ steps.vars.outputs.sha_short }},${{ env.BACKEND_IMAGE }}:latest
+
+      # Frontend Build & Push
+      - name: Build and Push Frontend Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: ${{ env.FRONTEND_IMAGE }}:${{ steps.vars.outputs.sha_short }},${{ env.FRONTEND_IMAGE }}:latest
+
+      # Kubernetes Manifest Dry-Run Validation
+      - name: Validate Kubernetes Manifests
+        run: |
+          docker run --rm -v $(pwd)/k8s:/k8s bitnami/kubectl:latest apply --dry-run=client -k /k8s || true

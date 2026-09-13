@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clouddocs-frontend
+  namespace: clouddocs
+  labels:
+    app: clouddocs-frontend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: clouddocs-frontend
+  template:
+    metadata:
+      labels:
+        app: clouddocs-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/clouddocs/clouddocs-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: clouddocs
+spec:
+  ports:
+    - port: 3000
+      targetPort: 3000
+  selector:
+    app: clouddocs-frontend
