@@ -10,6 +10,13 @@ import Link from "next/link";
 export default function SharedDocumentPage() {
   const { token } = useParams() as { token: string };
 
+  const resolveUrl = (url?: string) => {
+    if (!url) return "";
+    if (url.startsWith("http://") || url.startsWith("https://")) return url;
+    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    return `${base}${url}`;
+  };
+
   const { data: document, isLoading, error } = useQuery({
     queryKey: ["shared-doc", token],
     queryFn: () => fetchApi(`/api/v1/documents/shared/${token}`),
@@ -61,7 +68,7 @@ export default function SharedDocumentPage() {
               </div>
 
               <a
-                href={document.download_url}
+                href={resolveUrl(document.download_url)}
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center space-x-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-xl shadow-sm transition"
@@ -74,13 +81,13 @@ export default function SharedDocumentPage() {
             {/* Document preview iframe if supported */}
             {document.mime_type.includes("pdf") ? (
               <iframe
-                src={document.preview_url}
+                src={resolveUrl(document.preview_url)}
                 className="w-full h-[600px] rounded-xl border border-slate-200"
                 title="Shared PDF Preview"
               />
             ) : document.mime_type.includes("image") ? (
               <div className="flex justify-center p-6 bg-slate-50 rounded-xl">
-                <img src={document.preview_url} alt={document.name} className="max-h-[500px] object-contain rounded-lg" />
+                <img src={resolveUrl(document.preview_url)} alt={document.name} className="max-h-[500px] object-contain rounded-lg" />
               </div>
             ) : (
               <div className="text-center py-12 bg-slate-50 rounded-xl border border-dashed border-slate-200">

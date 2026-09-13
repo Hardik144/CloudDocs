@@ -54,6 +54,13 @@ export default function DocumentDetailPage() {
     /\.(png|jpe?g|webp|gif)$/i.test(document.name)
   );
 
+  const resolveUrl = (url?: string) => {
+    if (!url) return "";
+    if (url.startsWith("http://") || url.startsWith("https://")) return url;
+    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    return `${base}${url}`;
+  };
+
   // Load raw content if text editable
   useEffect(() => {
     if (isTextEditable && id) {
@@ -175,7 +182,7 @@ export default function DocumentDetailPage() {
               <span>Share Link</span>
             </button>
             <a
-              href={document.download_url}
+              href={resolveUrl(document.download_url)}
               target="_blank"
               rel="noreferrer"
               className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 shadow-sm transition"
@@ -264,12 +271,12 @@ export default function DocumentDetailPage() {
               <div className="space-y-3">
                 <div className="p-3 bg-indigo-50 text-indigo-900 rounded-xl text-xs font-medium flex items-center justify-between">
                   <span>PDF Previewer • Zoom & read enabled</span>
-                  <a href={document.download_url} target="_blank" rel="noreferrer" className="underline font-semibold">
+                  <a href={resolveUrl(document.download_url)} target="_blank" rel="noreferrer" className="underline font-semibold">
                     Open in new tab
                   </a>
                 </div>
                 <iframe
-                  src={document.preview_url}
+                  src={resolveUrl(document.preview_url)}
                   className="w-full h-[650px] rounded-xl border border-slate-200"
                   title="PDF Preview"
                 />
@@ -277,7 +284,7 @@ export default function DocumentDetailPage() {
             ) : isImage ? (
               <div className="flex flex-col items-center justify-center p-8 bg-slate-50 rounded-xl">
                 <img
-                  src={document.preview_url}
+                  src={resolveUrl(document.preview_url)}
                   alt={document.name}
                   className="max-h-[550px] object-contain rounded-lg shadow-md"
                 />
@@ -290,7 +297,7 @@ export default function DocumentDetailPage() {
                   For Microsoft Office documents (DOCX, XLSX, PPTX), please download the file to inspect and edit with your desktop suite.
                 </p>
                 <a
-                  href={document.download_url}
+                  href={resolveUrl(document.download_url)}
                   className="inline-flex items-center space-x-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700"
                 >
                   <Download className="w-4 h-4" />

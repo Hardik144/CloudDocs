@@ -106,6 +106,8 @@ async def local_upload(
         raise HTTPException(status_code=500, detail="Failed to save local file")
     return {"message": "File uploaded successfully", "storage_key": storage_key, "size": len(content)}
 
+import mimetypes
+
 @router.get("/download/{storage_key:path}")
 def local_download(
     storage_key: str,
@@ -115,8 +117,11 @@ def local_download(
     if content is None:
         raise HTTPException(status_code=404, detail="File not found")
 
+    guessed_type, _ = mimetypes.guess_type(filename or storage_key)
+    media_type = guessed_type or "application/octet-stream"
+
     headers = {}
     if filename:
-        headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        headers["Content-Disposition"] = f'inline; filename="{filename}"'
 
-    return Response(content=content, media_type="application/octet-stream", headers=headers)
+    return Response(content=content, media_type=media_type, headers=headers)
