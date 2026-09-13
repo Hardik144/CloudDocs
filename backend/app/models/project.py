@@ -38,6 +38,8 @@ class Project(Base):
     priority = Column(String(50), default=ProjectPriority.MEDIUM.value, nullable=False)
     start_date = Column(DateTime, nullable=True)
     end_date = Column(DateTime, nullable=True)
+    github_repo = Column(String(255), nullable=True) # e.g. "Hardik144/CloudDocs"
+    diagram_syntax = Column(Text, nullable=True) # Mermaid.js syntax
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 

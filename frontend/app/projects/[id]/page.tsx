@@ -19,19 +19,24 @@ import {
   X,
   Code2,
   Archive,
-  UploadCloud
+  UploadCloud,
+  Terminal,
+  GitBranch
 } from "lucide-react";
 import Link from "next/link";
 import { UploadModal } from "@/components/documents/UploadModal";
 import { UploadArchiveModal } from "@/components/projects/UploadArchiveModal";
 import { ProjectCodeExplorer } from "@/components/projects/ProjectCodeExplorer";
+import { GitHubSyncCard } from "@/components/projects/GitHubSyncCard";
+import { ArchitectureDiagramStudio } from "@/components/diagrams/ArchitectureDiagramStudio";
+import { CodeRunnerWidget } from "@/components/runner/CodeRunnerWidget";
 
 export default function ProjectDetailPage() {
   const { id } = useParams() as { id: string };
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  const [activeTab, setActiveTab] = useState<"overview" | "code" | "tasks" | "documents" | "milestones" | "members" | "activity">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "code" | "diagram" | "playground" | "tasks" | "documents" | "milestones" | "members" | "activity">("overview");
   const [uploadOpen, setUploadOpen] = useState(false);
   const [archiveModalOpen, setArchiveModalOpen] = useState(false);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
@@ -220,6 +225,8 @@ export default function ProjectDetailPage() {
           {[
             { key: "overview", label: "Overview", icon: FolderKanban },
             { key: "code", label: `Repository / Code ${archives.length > 0 ? `(${archives.length})` : ""}`, icon: Code2 },
+            { key: "diagram", label: "Architecture Studio", icon: GitBranch },
+            { key: "playground", label: "Sandbox / Runner", icon: Terminal },
             { key: "tasks", label: `Tasks (${tasks.length})`, icon: CheckSquare },
             { key: "documents", label: `Documents (${documents.length})`, icon: Files },
             { key: "milestones", label: `Milestones (${milestones.length})`, icon: Flag },
@@ -317,6 +324,13 @@ export default function ProjectDetailPage() {
                 </div>
               </div>
             )}
+
+            {/* GitHub CI/CD Sync Card */}
+            <GitHubSyncCard
+              projectId={id}
+              githubRepo={project.github_repo}
+              canManage={user?.id === project.owner_id || members.some((m: any) => m.user_id === user?.id && ["owner", "editor"].includes(m.role))}
+            />
           </div>
         )}
 
@@ -351,6 +365,24 @@ export default function ProjectDetailPage() {
                 </button>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Tab: Architecture Studio */}
+        {activeTab === "diagram" && (
+          <div className="space-y-6">
+            <ArchitectureDiagramStudio
+              projectId={id}
+              initialSyntax={project.diagram_syntax}
+              canEdit={user?.id === project.owner_id || members.some((m: any) => m.user_id === user?.id && ["owner", "editor"].includes(m.role))}
+            />
+          </div>
+        )}
+
+        {/* Tab: Python Code Runner & Sandbox */}
+        {activeTab === "playground" && (
+          <div className="space-y-6">
+            <CodeRunnerWidget />
           </div>
         )}
 

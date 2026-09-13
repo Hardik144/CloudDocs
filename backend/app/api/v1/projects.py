@@ -11,7 +11,8 @@ from app.models.task import Task
 from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectResponse,
     ProjectMemberCreate, ProjectMemberUpdate, ProjectMemberResponse,
-    ProjectHealthScore, ProjectArchiveResponse, ProjectArchiveSummary
+    ProjectHealthScore, ProjectArchiveResponse, ProjectArchiveSummary,
+    GitHubRepoUpdate, GitHubStatusResponse, DiagramUpdate
 )
 from app.api.deps import get_current_user
 from app.services.health_score import calculate_project_health
@@ -500,3 +501,165 @@ def download_archive(
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{archive.name}"'}
     )
+
+# --- GitHub Integration Endpoints ---
+
+@router.put("/{id}/github", response_model=ProjectResponse)
+def update_project_github(
+    id: str,
+    payload: GitHubRepoUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = db.query(Project).filter(Project.id == id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    role = get_user_project_role(project, current_user.id, db)
+    if not role or role not in [MemberRole.OWNER.value, MemberRole.EDITOR.value]:
+        raise HTTPException(status_code=403, detail="Only project owners and editors can update repository settings")
+
+    # Clean repo string if provided (e.g., strip URL parts)
+    repo = payload.github_repo.strip() if payload.github_repo else None
+    if repo:
+        repo = repo.replace("https://github.com/", "").replace("http://github.com/", "").strip("/")
+
+    project.github_repo = repo
+    db.commit()
+    db.refresh(project)
+    return project
+
+@router.get("/{id}/github/status", response_model=GitHubStatusResponse)
+def get_project_github_status(
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    import httpx
+    project = db.query(Project).filter(Project.id == id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not get_user_project_role(project, current_user.id, db):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not project.github_repo:
+        return GitHubStatusResponse(connected=False)
+
+    repo = project.github_repo
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "CloudDocs-App"
+    }
+
+    latest_commit = None
+    latest_workflow = None
+    error_msg = None
+
+    try:
+        with httpx.Client(timeout=4.0) as client:
+            # 1. Fetch latest commit
+            commit_res = client.get(f"https://api.github.com/repos/{repo}/commits?per_page=1", headers=headers)
+            if commit_res.status_code == 200:
+                commits_data = commit_res.json()
+                if commits_data and isinstance(commits_data, list):
+                    c = commits_data[0]
+                    latest_commit = {
+                        "sha": c.get("sha", "")[:7],
+                        "full_sha": c.get("sha", ""),
+                        "message": c.get("commit", {}).get("message", "").split("\n")[0],
+                        "author": c.get("commit", {}).get("author", {}).get("name", ""),
+                        "date": c.get("commit", {}).get("author", {}).get("date", ""),
+                        "url": c.get("html_url", "")
+                    }
+            elif commit_res.status_code == 404:
+                error_msg = f"Repository '{repo}' not found or is private."
+            elif commit_res.status_code == 403:
+                error_msg = "GitHub API rate limit exceeded. Showing cached or reconnect later."
+
+            # 2. Fetch latest workflow run (CI/CD)
+            runs_res = client.get(f"https://api.github.com/repos/{repo}/actions/runs?per_page=1", headers=headers)
+            if runs_res.status_code == 200:
+                runs_data = runs_res.json()
+                workflow_runs = runs_data.get("workflow_runs", [])
+                if workflow_runs:
+                    run = workflow_runs[0]
+                    latest_workflow = {
+                        "id": run.get("id"),
+                        "name": run.get("name"),
+                        "status": run.get("status"), # completed, in_progress, queued
+                        "conclusion": run.get("conclusion"), # success, failure, neutral, cancelled
+                        "branch": run.get("head_branch"),
+                        "event": run.get("event"),
+                        "html_url": run.get("html_url"),
+                        "updated_at": run.get("updated_at")
+                    }
+    except Exception as e:
+        error_msg = f"Could not reach GitHub API: {str(e)}"
+
+    return GitHubStatusResponse(
+        connected=True,
+        repo=repo,
+        latest_commit=latest_commit,
+        latest_workflow=latest_workflow,
+        error=error_msg
+    )
+
+# --- Architecture Diagram Endpoints ---
+
+@router.get("/{id}/diagram")
+def get_project_diagram(
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = db.query(Project).filter(Project.id == id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not get_user_project_role(project, current_user.id, db):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    default_template = """graph TD
+    Client[Web Browser / Client] --> Nginx[Nginx Reverse Proxy :80]
+    Nginx --> Frontend[Next.js 14 App :3000]
+    Nginx --> Backend[FastAPI Python :8000]
+    Backend --> Postgres[(PostgreSQL 16)]
+    Backend --> Redis[(Redis 7 Cache)]
+    Backend --> Storage[(Local Volume / R2 Storage)]"""
+
+    return {
+        "diagram_syntax": project.diagram_syntax or default_template
+    }
+
+@router.put("/{id}/diagram")
+def update_project_diagram(
+    id: str,
+    payload: DiagramUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = db.query(Project).filter(Project.id == id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    role = get_user_project_role(project, current_user.id, db)
+    if not role or role in [MemberRole.VIEWER.value]:
+        raise HTTPException(status_code=403, detail="Viewers cannot edit the architecture diagram")
+
+    project.diagram_syntax = payload.diagram_syntax
+    db.commit()
+    db.refresh(project)
+
+    log_activity_event(
+        db=db,
+        project_id=project.id,
+        actor_id=current_user.id,
+        action="diagram.updated",
+        entity_type="diagram",
+        entity_id=project.id,
+        description=f"Updated architecture diagram for {project.name}"
+    )
+
+    return {"message": "Architecture diagram updated successfully", "diagram_syntax": project.diagram_syntax}
+

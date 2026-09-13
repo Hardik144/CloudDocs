@@ -10,7 +10,7 @@ from app.middleware.metrics import PrometheusMiddleware
 from app.services.websocket_manager import ws_manager
 from app.api.v1 import (
     auth, users, projects, documents, tasks, milestones,
-    comments, notifications, search, activity, audit, storage, devops
+    comments, notifications, search, activity, audit, storage, devops, runner
 )
 
 # Setup logging
@@ -87,6 +87,7 @@ app.include_router(activity.router, prefix=f"{api_v1_prefix}/activity", tags=["A
 app.include_router(audit.router, prefix=f"{api_v1_prefix}/audit", tags=["Audit"])
 app.include_router(storage.router, prefix=f"{api_v1_prefix}/storage", tags=["Storage"])
 app.include_router(devops.router, prefix=f"{api_v1_prefix}/devops", tags=["DevOps"])
+app.include_router(runner.router, prefix=f"{api_v1_prefix}/runner", tags=["Runner"])
 
 # 4. WebSockets for real-time presence and updates
 @app.websocket("/ws/projects/{project_id}")

@@ -10,6 +10,8 @@ class ProjectBase(BaseModel):
     priority: str = "medium"
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
+    github_repo: Optional[str] = None
+    diagram_syntax: Optional[str] = None
 
 class ProjectCreate(ProjectBase):
     pass
@@ -21,6 +23,8 @@ class ProjectUpdate(BaseModel):
     priority: Optional[str] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
+    github_repo: Optional[str] = None
+    diagram_syntax: Optional[str] = None
 
 class ProjectMemberCreate(BaseModel):
     user_email: str
@@ -110,3 +114,17 @@ class ProjectArchiveSummary(BaseModel):
     uploader: Optional[UserResponse] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+class GitHubRepoUpdate(BaseModel):
+    github_repo: Optional[str] = None
+
+class GitHubStatusResponse(BaseModel):
+    connected: bool
+    repo: Optional[str] = None
+    latest_commit: Optional[dict] = None
+    latest_workflow: Optional[dict] = None
+    error: Optional[str] = None
+
+class DiagramUpdate(BaseModel):
+    diagram_syntax: Optional[str] = None
+
