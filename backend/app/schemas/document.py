@@ -65,6 +65,7 @@ class ShareLinkCreate(BaseModel):
     expires_in_hours: Optional[int] = 24
     password: Optional[str] = None
     max_downloads: Optional[int] = None
+    burn_after_reading: Optional[bool] = False
 
 class ShareLinkResponse(BaseModel):
     id: str
@@ -74,6 +75,8 @@ class ShareLinkResponse(BaseModel):
     expires_at: Optional[datetime] = None
     max_downloads: Optional[int] = None
     download_count: int
+    has_password: bool = False
+    burn_after_reading: bool = False
     created_at: datetime
     share_url: Optional[str] = None
 
@@ -112,3 +115,23 @@ class DocumentResponse(BaseModel):
     versions: Optional[List[DocumentVersionResponse]] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+class DiffLine(BaseModel):
+    type: str # "equal", "insert", "delete"
+    content: str
+    old_lineno: Optional[int] = None
+    new_lineno: Optional[int] = None
+
+class DocumentDiffResponse(BaseModel):
+    document_id: str
+    v1_number: int
+    v2_number: int
+    v1_created_at: datetime
+    v2_created_at: datetime
+    additions: int
+    deletions: int
+    diff_lines: List[DiffLine]
+    raw_diff: str
+
+class ShareLinkVerifyRequest(BaseModel):
+    password: Optional[str] = None

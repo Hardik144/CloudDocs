@@ -1,6 +1,7 @@
 import os
 import uuid
 import secrets
+import difflib
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
@@ -8,6 +9,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.core.database import get_db
+from app.core.security import get_password_hash, verify_password
 from app.models.document import (
     Document, DocumentVersion, DocumentPermission, ShareLink, DocumentPermissionLevel
 )
@@ -17,7 +19,8 @@ from app.schemas.document import (
     DocumentUploadRequest, DocumentUploadAuthResponse, DocumentCompleteUpload,
     DocumentResponse, DocumentVersionResponse, DocumentVersionCreate,
     DocumentPermissionCreate, DocumentPermissionResponse,
-    ShareLinkCreate, ShareLinkResponse, DocumentUpdate, DocumentTextContentUpdate
+    ShareLinkCreate, ShareLinkResponse, DocumentUpdate, DocumentTextContentUpdate,
+    DocumentDiffResponse, DiffLine, ShareLinkVerifyRequest
 )
 from app.api.deps import get_current_user, get_optional_user
 from app.services.storage import storage_provider
@@ -516,6 +519,109 @@ def restore_version(
     resp.user_permission = perm
     return resp
 
+@router.get("/{id}/diff", response_model=DocumentDiffResponse)
+def compare_document_versions(
+    id: str,
+    v1: int = Query(..., description="Base version number (e.g. 1)"),
+    v2: int = Query(..., description="Target version number to compare with (e.g. 2)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    doc = db.query(Document).filter(Document.id == id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    perm = get_document_permission(doc, current_user.id, db)
+    if not perm:
+        raise HTTPException(status_code=403, detail="Access denied to document")
+
+    ver1 = db.query(DocumentVersion).filter(DocumentVersion.document_id == id, DocumentVersion.version_number == v1).first()
+    ver2 = db.query(DocumentVersion).filter(DocumentVersion.document_id == id, DocumentVersion.version_number == v2).first()
+
+    if not ver1 or not ver2:
+        raise HTTPException(status_code=404, detail="One or both versions not found for comparison")
+
+    bytes1 = storage_provider.get_file_bytes(ver1.storage_key) or b""
+    bytes2 = storage_provider.get_file_bytes(ver2.storage_key) or b""
+
+    try:
+        text1 = bytes1.decode("utf-8")
+        text2 = bytes2.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Visual diff is only available for text/markdown documents")
+
+    lines1 = text1.splitlines()
+    lines2 = text2.splitlines()
+
+    matcher = difflib.SequenceMatcher(None, lines1, lines2)
+    diff_lines: List[DiffLine] = []
+    additions = 0
+    deletions = 0
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for idx in range(i1, i2):
+                diff_lines.append(DiffLine(
+                    type="equal",
+                    content=lines1[idx],
+                    old_lineno=idx + 1,
+                    new_lineno=j1 + (idx - i1) + 1
+                ))
+        elif tag == "delete":
+            for idx in range(i1, i2):
+                deletions += 1
+                diff_lines.append(DiffLine(
+                    type="delete",
+                    content=lines1[idx],
+                    old_lineno=idx + 1,
+                    new_lineno=None
+                ))
+        elif tag == "insert":
+            for idx in range(j1, j2):
+                additions += 1
+                diff_lines.append(DiffLine(
+                    type="insert",
+                    content=lines2[idx],
+                    old_lineno=None,
+                    new_lineno=idx + 1
+                ))
+        elif tag == "replace":
+            for idx in range(i1, i2):
+                deletions += 1
+                diff_lines.append(DiffLine(
+                    type="delete",
+                    content=lines1[idx],
+                    old_lineno=idx + 1,
+                    new_lineno=None
+                ))
+            for idx in range(j1, j2):
+                additions += 1
+                diff_lines.append(DiffLine(
+                    type="insert",
+                    content=lines2[idx],
+                    old_lineno=None,
+                    new_lineno=idx + 1
+                ))
+
+    raw_diff_str = "\n".join(difflib.unified_diff(
+        lines1, lines2,
+        fromfile=f"v{v1}",
+        tofile=f"v{v2}",
+        lineterm=""
+    ))
+
+    return DocumentDiffResponse(
+        document_id=id,
+        v1_number=v1,
+        v2_number=v2,
+        v1_created_at=ver1.created_at,
+        v2_created_at=ver2.created_at,
+        additions=additions,
+        deletions=deletions,
+        diff_lines=diff_lines,
+        raw_diff=raw_diff_str
+    )
+
 # --- Document Sharing & Links ---
 
 @router.post("/{id}/share", response_model=DocumentPermissionResponse)
@@ -584,12 +690,16 @@ def create_share_link(
     if link_in.expires_in_hours:
         expires_at = datetime.now(timezone.utc) + timedelta(hours=link_in.expires_in_hours)
 
+    password_hash = get_password_hash(link_in.password) if link_in.password else None
+    max_downloads = 1 if link_in.burn_after_reading else link_in.max_downloads
+
     share_link = ShareLink(
         document_id=doc.id,
         token=token,
         permission_level=link_in.permission_level,
         expires_at=expires_at,
-        max_downloads=link_in.max_downloads,
+        password_hash=password_hash,
+        max_downloads=max_downloads,
         created_by_id=current_user.id
     )
     db.add(share_link)
@@ -597,14 +707,17 @@ def create_share_link(
     db.refresh(share_link)
 
     resp = ShareLinkResponse.model_validate(share_link)
+    resp.has_password = bool(share_link.password_hash)
+    resp.burn_after_reading = (share_link.max_downloads == 1)
     resp.share_url = f"/shared/{token}"
     return resp
 
 @router.get("/shared/{token}")
-def get_shared_document_by_token(
+def get_shared_document_metadata(
     token: str,
     db: Session = Depends(get_db)
 ):
+    """Returns metadata and whether password verification is required before unlocking."""
     link = db.query(ShareLink).filter(ShareLink.token == token).first()
     if not link:
         raise HTTPException(status_code=404, detail="Invalid or expired share link")
@@ -615,13 +728,51 @@ def get_shared_document_by_token(
             raise HTTPException(status_code=410, detail="Share link has expired")
 
     if link.max_downloads and link.download_count >= link.max_downloads:
-        raise HTTPException(status_code=410, detail="Download limit exceeded for this share link")
+        raise HTTPException(status_code=410, detail="This single-use share link has already been viewed/burned.")
 
     doc = link.document
     if doc.is_deleted:
         raise HTTPException(status_code=404, detail="Document is no longer available")
 
-    # Increment count
+    return {
+        "id": doc.id,
+        "name": doc.name,
+        "mime_type": doc.mime_type,
+        "file_size": doc.file_size,
+        "has_password": bool(link.password_hash),
+        "burn_after_reading": (link.max_downloads == 1),
+        "expires_at": link.expires_at.isoformat() if link.expires_at else None
+    }
+
+@router.post("/shared/{token}/unlock")
+def unlock_shared_document(
+    token: str,
+    verify_in: ShareLinkVerifyRequest,
+    db: Session = Depends(get_db)
+):
+    """Verifies password if required, burns link if single-use, and unlocks download/preview URLs."""
+    link = db.query(ShareLink).filter(ShareLink.token == token).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Invalid or expired share link")
+
+    if link.expires_at:
+        exp_dt = link.expires_at if link.expires_at.tzinfo else link.expires_at.replace(tzinfo=timezone.utc)
+        if exp_dt < datetime.now(timezone.utc):
+            raise HTTPException(status_code=410, detail="Share link has expired")
+
+    if link.max_downloads and link.download_count >= link.max_downloads:
+        raise HTTPException(status_code=410, detail="This single-use share link has already been viewed/burned.")
+
+    # Check password if configured
+    if link.password_hash:
+        if not verify_in.password or not verify_password(verify_in.password, link.password_hash):
+            raise HTTPException(status_code=401, detail="Incorrect password for this protected share link")
+
+    doc = link.document
+    if doc.is_deleted:
+        raise HTTPException(status_code=404, detail="Document is no longer available")
+
+    # Increment view count
     link.download_count += 1
     db.commit()
 
@@ -631,6 +782,7 @@ def get_shared_document_by_token(
         "mime_type": doc.mime_type,
         "file_size": doc.file_size,
         "permission_level": link.permission_level,
+        "burned": bool(link.max_downloads and link.download_count >= link.max_downloads),
         "download_url": storage_provider.generate_download_url(doc.storage_key, filename=doc.name),
         "preview_url": storage_provider.generate_download_url(doc.storage_key)
     }
