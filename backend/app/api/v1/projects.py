@@ -4,17 +4,21 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.core.database import get_db
 from app.models.project import Project, ProjectMember, MemberRole, ProjectStatus, Milestone
+from app.models.project_archive import ProjectArchive
 from app.models.user import User
 from app.models.document import Document
 from app.models.task import Task
 from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectResponse,
     ProjectMemberCreate, ProjectMemberUpdate, ProjectMemberResponse,
-    ProjectHealthScore
+    ProjectHealthScore, ProjectArchiveResponse, ProjectArchiveSummary
 )
 from app.api.deps import get_current_user
 from app.services.health_score import calculate_project_health
 from app.services.audit_service import log_audit_event, log_activity_event, create_user_notification
+from app.services.storage import storage_provider
+from app.services.archive_service import parse_archive_bytes, read_file_from_archive
+from fastapi import UploadFile, File, Form, Response, Query
 
 router = APIRouter()
 
@@ -321,3 +325,178 @@ def get_project_health(
         raise HTTPException(status_code=403, detail="Access denied")
 
     return calculate_project_health(id, db)
+
+# --- Project Code & Repository Archive Endpoints ---
+
+@router.post("/{id}/archives/upload", response_model=ProjectArchiveResponse)
+async def upload_project_archive(
+    id: str,
+    file: UploadFile = File(...),
+    description: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = db.query(Project).filter(Project.id == id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    role = get_user_project_role(project, current_user.id, db)
+    if role not in [MemberRole.OWNER.value, MemberRole.EDITOR.value]:
+        raise HTTPException(status_code=403, detail="Must be project owner or editor to upload code archives")
+
+    filename = file.filename or "archive.zip"
+    ext = filename.lower()
+    if not (ext.endswith(".zip") or ext.endswith(".tar.gz") or ext.endswith(".tgz") or ext.endswith(".tar")):
+        raise HTTPException(status_code=400, detail="Only .zip and .tar.gz / .tgz project archives are supported")
+
+    content = await file.read()
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    archive_type = "zip" if ext.endswith(".zip") else "tar.gz"
+
+    try:
+        tree, total_files, total_dirs = parse_archive_bytes(content, filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    storage_key = f"projects/{project.id}/archives/{filename}"
+    mime_type = file.content_type or "application/zip"
+    saved = storage_provider.save_file(storage_key, content, mime_type)
+    if not saved:
+        raise HTTPException(status_code=500, detail="Failed to store project archive")
+
+    archive = ProjectArchive(
+        project_id=project.id,
+        uploaded_by_id=current_user.id,
+        name=filename,
+        storage_key=storage_key,
+        archive_type=archive_type,
+        file_size=len(content),
+        total_files=total_files,
+        total_dirs=total_dirs,
+        description=description,
+        file_tree=tree
+    )
+    db.add(archive)
+    db.commit()
+    db.refresh(archive)
+
+    log_activity_event(
+        db=db,
+        actor_id=current_user.id,
+        action="archive.uploaded",
+        entity_type="project_archive",
+        entity_id=archive.id,
+        description=f"Uploaded project archive {archive.name}",
+        project_id=project.id
+    )
+
+    return archive
+
+@router.get("/{id}/archives", response_model=List[ProjectArchiveSummary])
+def list_project_archives(
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = db.query(Project).filter(Project.id == id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not get_user_project_role(project, current_user.id, db):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    archives = db.query(ProjectArchive).filter(
+        ProjectArchive.project_id == id
+    ).order_by(ProjectArchive.created_at.desc()).all()
+    return archives
+
+@router.get("/{id}/archives/{archive_id}", response_model=ProjectArchiveResponse)
+def get_project_archive(
+    id: str,
+    archive_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = db.query(Project).filter(Project.id == id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not get_user_project_role(project, current_user.id, db):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    archive = db.query(ProjectArchive).filter(
+        ProjectArchive.id == archive_id,
+        ProjectArchive.project_id == id
+    ).first()
+    if not archive:
+        raise HTTPException(status_code=404, detail="Project archive not found")
+
+    return archive
+
+@router.get("/{id}/archives/{archive_id}/file")
+def view_archive_file(
+    id: str,
+    archive_id: str,
+    path: str = Query(..., description="Relative path of file inside archive"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = db.query(Project).filter(Project.id == id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not get_user_project_role(project, current_user.id, db):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    archive = db.query(ProjectArchive).filter(
+        ProjectArchive.id == archive_id,
+        ProjectArchive.project_id == id
+    ).first()
+    if not archive:
+        raise HTTPException(status_code=404, detail="Project archive not found")
+
+    archive_bytes = storage_provider.get_file_bytes(archive.storage_key)
+    if not archive_bytes:
+        raise HTTPException(status_code=404, detail="Archive file not found in storage")
+
+    try:
+        result = read_file_from_archive(archive_bytes, archive.name, path)
+        return result
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.get("/{id}/archives/{archive_id}/download")
+def download_archive(
+    id: str,
+    archive_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    project = db.query(Project).filter(Project.id == id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not get_user_project_role(project, current_user.id, db):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    archive = db.query(ProjectArchive).filter(
+        ProjectArchive.id == archive_id,
+        ProjectArchive.project_id == id
+    ).first()
+    if not archive:
+        raise HTTPException(status_code=404, detail="Project archive not found")
+
+    archive_bytes = storage_provider.get_file_bytes(archive.storage_key)
+    if not archive_bytes:
+        raise HTTPException(status_code=404, detail="Archive file not found in storage")
+
+    media_type = "application/zip" if archive.archive_type == "zip" else "application/gzip"
+    return Response(
+        content=archive_bytes,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{archive.name}"'}
+    )

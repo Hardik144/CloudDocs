@@ -82,3 +82,31 @@ class ProjectResponse(ProjectBase):
     health: Optional[ProjectHealthScore] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+class ProjectArchiveResponse(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    archive_type: str
+    file_size: int
+    total_files: int
+    total_dirs: int
+    description: Optional[str] = None
+    file_tree: dict
+    created_at: datetime
+    uploader: Optional[UserResponse] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class ProjectArchiveSummary(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    archive_type: str
+    file_size: int
+    total_files: int
+    total_dirs: int
+    created_at: datetime
+    uploader: Optional[UserResponse] = None
+
+    model_config = ConfigDict(from_attributes=True)

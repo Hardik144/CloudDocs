@@ -16,18 +16,24 @@ import {
   Plus,
   ArrowLeft,
   UserPlus,
-  X
+  X,
+  Code2,
+  Archive,
+  UploadCloud
 } from "lucide-react";
 import Link from "next/link";
 import { UploadModal } from "@/components/documents/UploadModal";
+import { UploadArchiveModal } from "@/components/projects/UploadArchiveModal";
+import { ProjectCodeExplorer } from "@/components/projects/ProjectCodeExplorer";
 
 export default function ProjectDetailPage() {
   const { id } = useParams() as { id: string };
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  const [activeTab, setActiveTab] = useState<"overview" | "tasks" | "documents" | "milestones" | "members" | "activity">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "code" | "tasks" | "documents" | "milestones" | "members" | "activity">("overview");
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
   const [taskTitle, setTaskTitle] = useState("");
@@ -77,6 +83,13 @@ export default function ProjectDetailPage() {
   const { data: activities = [] } = useQuery({
     queryKey: ["project-activity", id],
     queryFn: () => fetchApi(`/api/v1/activity/?project_id=${id}`),
+    enabled: !!id,
+  });
+
+  // Fetch Project Archives / Repositories
+  const { data: archives = [], refetch: refetchArchives } = useQuery({
+    queryKey: ["project-archives", id],
+    queryFn: () => fetchApi(`/api/v1/projects/${id}/archives`),
     enabled: !!id,
   });
 
@@ -206,6 +219,7 @@ export default function ProjectDetailPage() {
         <div className="flex border-b border-slate-200 space-x-8 overflow-x-auto">
           {[
             { key: "overview", label: "Overview", icon: FolderKanban },
+            { key: "code", label: `Repository / Code ${archives.length > 0 ? `(${archives.length})` : ""}`, icon: Code2 },
             { key: "tasks", label: `Tasks (${tasks.length})`, icon: CheckSquare },
             { key: "documents", label: `Documents (${documents.length})`, icon: Files },
             { key: "milestones", label: `Milestones (${milestones.length})`, icon: Flag },
@@ -301,6 +315,40 @@ export default function ProjectDetailPage() {
                     </div>
                   </div>
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab: Repository / Code */}
+        {activeTab === "code" && (
+          <div className="space-y-6">
+            {archives.length > 0 ? (
+              <ProjectCodeExplorer
+                projectId={id}
+                archiveId={archives[0].id}
+                archiveName={archives[0].name}
+                archiveSize={archives[0].file_size}
+                totalFiles={archives[0].total_files}
+                totalDirs={archives[0].total_dirs}
+                onUploadNew={() => setArchiveModalOpen(true)}
+              />
+            ) : (
+              <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center shadow-sm max-w-2xl mx-auto">
+                <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-3xl flex items-center justify-center mx-auto mb-4">
+                  <Code2 className="w-8 h-8" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900">No Code Repository Attached</h3>
+                <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 mb-6">
+                  Upload your full project directory or codebase as a .zip or .tar.gz archive to store it, browse the files, and inspect code directly in your browser.
+                </p>
+                <button
+                  onClick={() => setArchiveModalOpen(true)}
+                  className="inline-flex items-center space-x-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-2xl shadow-sm transition-colors"
+                >
+                  <UploadCloud className="w-4 h-4" />
+                  <span>Upload Project Code (.zip)</span>
+                </button>
               </div>
             )}
           </div>
@@ -589,6 +637,16 @@ export default function ProjectDetailPage() {
         onClose={() => setUploadOpen(false)}
         projectId={id}
         onSuccess={() => refetchDocs()}
+      />
+
+      <UploadArchiveModal
+        isOpen={archiveModalOpen}
+        onClose={() => setArchiveModalOpen(false)}
+        projectId={id}
+        onSuccess={() => {
+          refetchArchives();
+          setActiveTab("code");
+        }}
       />
     </AppLayout>
   );

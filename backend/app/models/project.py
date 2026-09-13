@@ -47,6 +47,7 @@ class Project(Base):
     tasks = relationship("Task", back_populates="project", cascade="all, delete-orphan")
     milestones = relationship("Milestone", back_populates="project", cascade="all, delete-orphan")
     activities = relationship("Activity", back_populates="project", cascade="all, delete-orphan")
+    archives = relationship("ProjectArchive", back_populates="project", cascade="all, delete-orphan")
 
 class ProjectMember(Base):
     __tablename__ = "project_members"
